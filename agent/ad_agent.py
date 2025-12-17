@@ -119,6 +119,7 @@ class ADAgent:
         """
         from collector.network import ActivePortScanner, get_all_network_interfaces
         import os
+        import ipaddress
         
         # Timeout configurable via env var AGENT_ACTIVE_PORT_TIMEOUT (seconds)
         active_timeout = float(os.getenv('AGENT_ACTIVE_PORT_TIMEOUT', '1.0'))
@@ -179,7 +180,20 @@ class ADAgent:
                     # Fallback: scanner le /24 de l'IP locale
                     local_ip = self.local_info.get('ip_address', '127.0.0.1')
                     print(f"[INFO] Aucune interface détectée, fallback sur le sous-réseau /24 de {local_ip}")
-                    self.network_scan_results = scanner.scan_subnet(local_ip, subnet_mask=24)
+                    try:
+                        net = ipaddress.ip_network(f"{local_ip}/24", strict=False)
+                        results_all = []
+                        for host in net.hosts():
+                            host_str = str(host)
+                            for port in scanner.critical_ports.keys():
+                                result = scanner.scan_host(host_str, port)
+                                results_all.append(result)
+                                if result['is_open']:
+                                    print(f"[INFO] Port {port}/{result['service_name']} ouvert sur {host_str}")
+                        self.network_scan_results = results_all
+                    except Exception as e:
+                        print(f"[ERROR] Erreur lors du fallback: {e}")
+                        self.network_scan_results = []
     
     def collect_ad_info(self):
         """

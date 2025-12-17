@@ -140,6 +140,8 @@ class ADAgentMultithreaded:
             # Permettre override via env var AGENT_SCAN_NETWORK (ex: 70.70.70.0/24)
             scan_network = os.getenv('AGENT_SCAN_NETWORK')
             
+            hosts = []
+            
             if scan_network:
                 # Utiliser le réseau fourni en env var
                 print(f"[INFO] Scan du réseau spécifié: {scan_network}")
@@ -151,29 +153,30 @@ class ADAgentMultithreaded:
                     hosts = [self.local_info.get('ip_address', '127.0.0.1')]
             else:
                 # Détecter tous les réseaux locaux
-                interfaces = get_all_network_interfaces()
-                hosts = []
-                
-                if interfaces:
-                    print(f"[INFO] Collecte des hôtes à scanner depuis {len(interfaces)} interface(s)")
-                    for iface in interfaces:
-                        if iface.get('subnet'):
-                            print(f"[INFO] Interface {iface['name']}: {iface['subnet']}")
-                            try:
-                                net = ipaddress.ip_network(iface['subnet'], strict=False)
-                                hosts.extend([str(h) for h in net.hosts()])
-                            except Exception as e:
-                                print(f"[ERROR] Erreur pour {iface['subnet']}: {e}")
+                try:
+                    interfaces = get_all_network_interfaces()
+                    if interfaces:
+                        print(f"[INFO] Collecte des hôtes à scanner depuis {len(interfaces)} interface(s)")
+                        for iface in interfaces:
+                            if iface.get('subnet'):
+                                print(f"[INFO] Interface {iface['name']}: {iface['subnet']}")
+                                try:
+                                    net = ipaddress.ip_network(iface['subnet'], strict=False)
+                                    hosts.extend([str(h) for h in net.hosts()])
+                                except Exception as e:
+                                    print(f"[ERROR] Erreur pour {iface['subnet']}: {e}")
+                except Exception as e:
+                    print(f"[ERROR] Erreur lors de la détection des interfaces: {e}")
                 
                 # Fallback
                 if not hosts:
                     local_ip = self.local_info.get('ip_address', '127.0.0.1')
                     print(f"[INFO] Fallback sur le /24 de {local_ip}")
                     try:
-                        ip_obj = ipaddress.ip_address(local_ip)
-                        network = ipaddress.ip_network(f"{ip_obj}/24", strict=False)
+                        network = ipaddress.ip_network(f"{local_ip}/24", strict=False)
                         hosts = [str(h) for h in network.hosts()]
-                    except Exception:
+                    except Exception as e:
+                        print(f"[ERROR] Erreur lors du fallback: {e}")
                         hosts = [local_ip]
         
         # Créer une fonction pour scanner un hôte
