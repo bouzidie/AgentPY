@@ -255,44 +255,46 @@ def get_all_network_interfaces() -> List[Dict]:
     interfaces = []
     
     try:
-        if socket.socket.has_ipv4:
-            # Sur Windows, utiliser ipconfig /all pour parser les interfaces
-            result = subprocess.run(['ipconfig', '/all'], capture_output=True, text=True, encoding='utf-8', errors='ignore')
+        # Sur Windows, utiliser ipconfig /all pour parser les interfaces
+        result = subprocess.run(['ipconfig', '/all'], capture_output=True, text=True, encoding='utf-8', errors='ignore', timeout=10)
+        
+        current_interface = None
+        for line in result.stdout.split('\n'):
+            line_stripped = line.strip()
             
-            current_interface = None
-            for line in result.stdout.split('\n'):
-                line_stripped = line.strip()
-                
-                # Détection d'une nouvelle interface
-                if ':' in line and not line.startswith(' '):
-                    if current_interface and 'ip' in current_interface:
-                        interfaces.append(current_interface)
-                    current_interface = {'name': line_stripped.split(':')[0], 'ip': None, 'subnet': None}
-                
-                # Extraction IP
-                if current_interface and 'Adresse IPv4' in line:
-                    ip_str = line.split(':')[1].strip()
-                    if ip_str and ip_str != '':
+            # Détection d'une nouvelle interface (commence sans espace)
+            if line and not line.startswith(' ') and ':' in line:
+                if current_interface and 'ip' in current_interface and current_interface['ip']:
+                    interfaces.append(current_interface)
+                # Extraire le nom (avant le ':')
+                name = line.split(':')[0].strip()
+                current_interface = {'name': name, 'ip': None, 'subnet': None, 'subnet_mask': None}
+            
+            # Extraction IP (ligne indentée)
+            if current_interface and line.startswith(' '):
+                if 'Adresse IPv4' in line or 'IPv4 Address' in line:
+                    ip_str = line.split(':')[1].strip() if ':' in line else ''
+                    if ip_str and ip_str != '' and ip_str != '127.0.0.1':
                         current_interface['ip'] = ip_str
                 
                 # Extraction masque
-                if current_interface and 'Masque de sous-réseau' in line:
-                    mask_str = line.split(':')[1].strip()
+                if 'Masque de sous-réseau' in line or 'Subnet Mask' in line:
+                    mask_str = line.split(':')[1].strip() if ':' in line else ''
                     if mask_str and mask_str != '':
                         current_interface['subnet_mask'] = mask_str
-                        # Calculer le /24 à partir de l'IP et du masque
+                        # Calculer le subnet à partir de l'IP et du masque
                         try:
-                            if 'ip' in current_interface and current_interface['ip']:
+                            if current_interface.get('ip'):
                                 net = ipaddress.ip_network(f"{current_interface['ip']}/{mask_str}", strict=False)
                                 current_interface['subnet'] = str(net)
                         except Exception:
                             pass
-            
-            # Ajouter la dernière interface
-            if current_interface and 'ip' in current_interface and current_interface['ip']:
-                interfaces.append(current_interface)
         
-        # Filtrer les interfaces sans IP valide
+        # Ajouter la dernière interface
+        if current_interface and 'ip' in current_interface and current_interface['ip']:
+            interfaces.append(current_interface)
+        
+        # Filtrer les interfaces sans IP valide et sans 127.0.0.1
         valid_interfaces = [i for i in interfaces if i.get('ip') and i['ip'] != '127.0.0.1']
         
         if valid_interfaces:
