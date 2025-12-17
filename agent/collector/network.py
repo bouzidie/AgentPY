@@ -178,6 +178,47 @@ class ActivePortScanner:
                     print(f"[INFO] Port {port}/{result['service_name']} ouvert sur {host}")
         
         return results
+    
+    def scan_subnet(self, ip_address: str, subnet_mask: int = 24) -> List[Dict]:
+        """
+        Scanner une plage de sous-réseau (ex: 10.0.3.0/24)
+        
+        Args:
+            ip_address: Une adresse IP du sous-réseau (ex: 10.0.3.15)
+            subnet_mask: CIDR notation (par défaut 24)
+        
+        Returns:
+            Liste des résultats de scan
+        """
+        import ipaddress
+        
+        try:
+            # Créer l'objet réseau à partir de l'IP et du subnet
+            ip_obj = ipaddress.ip_address(ip_address)
+            network = ipaddress.ip_network(f"{ip_obj}/{subnet_mask}", strict=False)
+            
+            results = []
+            host_count = 0
+            
+            print(f"[INFO] Scan du sous-réseau {network}")
+            
+            # Parcourir les hôtes du réseau
+            for host in network.hosts():  # Exclut le réseau et broadcast
+                host_str = str(host)
+                for port in self.critical_ports.keys():
+                    result = self.scan_host(host_str, port)
+                    results.append(result)
+                    
+                    if result['is_open']:
+                        print(f"[INFO] Port {port}/{result['service_name']} ouvert sur {host_str}")
+                        host_count += 1
+            
+            print(f"[INFO] Scan du sous-réseau terminé. {host_count} services trouvés.")
+            return results
+            
+        except Exception as e:
+            print(f"[ERROR] Erreur lors du scan du sous-réseau: {e}")
+            return []
 
 
 # Fonction utilitaire pour obtenir l'adresse IP locale
@@ -198,6 +239,72 @@ def get_local_ip() -> str:
     except Exception as e:
         print(f"[ERROR] Impossible d'obtenir l'adresse IP locale: {e}")
         return "127.0.0.1"
+
+
+def get_all_network_interfaces() -> List[Dict]:
+    """
+    Obtenir toutes les interfaces réseau actives et leurs informations
+    (important pour les machines avec plusieurs NICs)
+    
+    Returns:
+        Liste de dictionnaires avec 'ip', 'subnet', 'gateway'
+    """
+    import subprocess
+    import ipaddress
+    
+    interfaces = []
+    
+    try:
+        if socket.socket.has_ipv4:
+            # Sur Windows, utiliser ipconfig /all pour parser les interfaces
+            result = subprocess.run(['ipconfig', '/all'], capture_output=True, text=True, encoding='utf-8', errors='ignore')
+            
+            current_interface = None
+            for line in result.stdout.split('\n'):
+                line_stripped = line.strip()
+                
+                # Détection d'une nouvelle interface
+                if ':' in line and not line.startswith(' '):
+                    if current_interface and 'ip' in current_interface:
+                        interfaces.append(current_interface)
+                    current_interface = {'name': line_stripped.split(':')[0], 'ip': None, 'subnet': None}
+                
+                # Extraction IP
+                if current_interface and 'Adresse IPv4' in line:
+                    ip_str = line.split(':')[1].strip()
+                    if ip_str and ip_str != '':
+                        current_interface['ip'] = ip_str
+                
+                # Extraction masque
+                if current_interface and 'Masque de sous-réseau' in line:
+                    mask_str = line.split(':')[1].strip()
+                    if mask_str and mask_str != '':
+                        current_interface['subnet_mask'] = mask_str
+                        # Calculer le /24 à partir de l'IP et du masque
+                        try:
+                            if 'ip' in current_interface and current_interface['ip']:
+                                net = ipaddress.ip_network(f"{current_interface['ip']}/{mask_str}", strict=False)
+                                current_interface['subnet'] = str(net)
+                        except Exception:
+                            pass
+            
+            # Ajouter la dernière interface
+            if current_interface and 'ip' in current_interface and current_interface['ip']:
+                interfaces.append(current_interface)
+        
+        # Filtrer les interfaces sans IP valide
+        valid_interfaces = [i for i in interfaces if i.get('ip') and i['ip'] != '127.0.0.1']
+        
+        if valid_interfaces:
+            print(f"[INFO] {len(valid_interfaces)} interface(s) réseau détectée(s):")
+            for iface in valid_interfaces:
+                print(f"  - {iface['name']}: {iface['ip']} ({iface.get('subnet', 'N/A')})")
+        
+        return valid_interfaces
+        
+    except Exception as e:
+        print(f"[ERROR] Erreur lors de la détection des interfaces: {e}")
+        return []
 
 
 # Fonction utilitaire pour obtenir l'adresse MAC

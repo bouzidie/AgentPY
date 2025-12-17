@@ -131,24 +131,62 @@ def get_domain_name() -> str:
         Nom du domaine
     """
     try:
-        # Sur Windows, utiliser la commande systeminfo
+        # Sur Windows, essayer plusieurs méthodes
         if platform.system() == 'Windows':
-            result = subprocess.run(['systeminfo'], capture_output=True, text=True, encoding='utf-8', errors='ignore')
-            for line in result.stdout.split('\n'):
-                if 'Domain:' in line:
-                    domain = line.split(':')[1].strip()
-                    if domain != 'WORKGROUP':
-                        return domain
+            # Méthode 1: wmic (plus fiable sur domaine)
+            try:
+                result = subprocess.run(['wmic', 'computersystem', 'get', 'domain'], 
+                                      capture_output=True, text=True, encoding='utf-8', errors='ignore', timeout=5)
+                for line in result.stdout.split('\n'):
+                    line = line.strip()
+                    if line and line != 'Domain' and line != 'WORKGROUP':
+                        return line
+            except Exception:
+                pass
+            
+            # Méthode 2: systeminfo
+            try:
+                result = subprocess.run(['systeminfo'], capture_output=True, text=True, encoding='utf-8', errors='ignore', timeout=5)
+                for line in result.stdout.split('\n'):
+                    if 'Domain:' in line:
+                        domain = line.split(':')[1].strip()
+                        if domain != 'WORKGROUP':
+                            return domain
+            except Exception:
+                pass
+            
+            # Méthode 3: ipconfig /all (rechercher le suffixe DNS primaire)
+            try:
+                result = subprocess.run(['ipconfig', '/all'], capture_output=True, text=True, encoding='utf-8', errors='ignore', timeout=5)
+                for line in result.stdout.split('\n'):
+                    if 'Suffixe DNS primaire' in line or 'Primary DNS Suffix' in line:
+                        domain = line.split(':')[1].strip()
+                        if domain and domain != '(vide)':
+                            return domain
+            except Exception:
+                pass
         
-        # Tenter d'utiliser la commande hostname
-        result = subprocess.run(['hostname'], capture_output=True, text=True)
-        hostname = result.stdout.strip()
+        # Méthode 4: utiliser hostname FQDN
+        try:
+            result = subprocess.run(['hostname', '-f'], capture_output=True, text=True, timeout=5)
+            hostname = result.stdout.strip()
+            if '.' in hostname:
+                parts = hostname.split('.')
+                if len(parts) > 1:
+                    return '.'.join(parts[1:])
+        except Exception:
+            pass
         
-        # Extraire le domaine du FQDN
-        if '.' in hostname:
-            parts = hostname.split('.')
-            if len(parts) > 1:
-                return '.'.join(parts[1:])
+        # Fallback: essayer hostname simple
+        try:
+            result = subprocess.run(['hostname'], capture_output=True, text=True, timeout=5)
+            hostname = result.stdout.strip()
+            if '.' in hostname:
+                parts = hostname.split('.')
+                if len(parts) > 1:
+                    return '.'.join(parts[1:])
+        except Exception:
+            pass
         
         return "UNKNOWN_DOMAIN"
         

@@ -31,7 +31,8 @@ class ADAgent:
         Args:
             server_url: URL du serveur central (optionnel)
         """
-        self.server_url = server_url or 'http://localhost:5000/api/v1/report'
+        import os
+        self.server_url = server_url or os.getenv('AGENT_SERVER_URL', 'http://localhost:5000/api/v1/report')
         self.local_info = {}
         self.discovered_hosts = []
         self.network_scan_results = []
@@ -116,23 +117,69 @@ class ADAgent:
         """
         Scanner les ports critiques de manière active
         """
-        from collector.network import ActivePortScanner
+        from collector.network import ActivePortScanner, get_all_network_interfaces
         import os
         
         # Timeout configurable via env var AGENT_ACTIVE_PORT_TIMEOUT (seconds)
         active_timeout = float(os.getenv('AGENT_ACTIVE_PORT_TIMEOUT', '1.0'))
         
+        scanner = ActivePortScanner(timeout=active_timeout)
+        
         # Scanner les hôtes découverts passivement
         if self.discovered_hosts:
             hosts = [host['ip'] for host in self.discovered_hosts]
-            
-            scanner = ActivePortScanner(timeout=active_timeout)
             self.network_scan_results = scanner.scan_hosts(hosts)
         else:
-            # Scanner l'adresse IP locale
-            local_ip = self.local_info.get('ip_address', '127.0.0.1')
-            scanner = ActivePortScanner(timeout=active_timeout)
-            self.network_scan_results = scanner.scan_hosts([local_ip])
+            # Si aucun hôte découvert passivement, scanner le sous-réseau complet
+            # Permettre override via env var AGENT_SCAN_NETWORK (ex: 70.70.70.0/24)
+            scan_network = os.getenv('AGENT_SCAN_NETWORK')
+            
+            if scan_network:
+                # Utiliser le réseau fourni en env var
+                print(f"[INFO] Scan du réseau spécifié: {scan_network}")
+                import ipaddress
+                try:
+                    net = ipaddress.ip_network(scan_network, strict=False)
+                    results_all = []
+                    for host in net.hosts():
+                        host_str = str(host)
+                        for port in scanner.critical_ports.keys():
+                            result = scanner.scan_host(host_str, port)
+                            results_all.append(result)
+                            if result['is_open']:
+                                print(f"[INFO] Port {port}/{result['service_name']} ouvert sur {host_str}")
+                    self.network_scan_results = results_all
+                except Exception as e:
+                    print(f"[ERROR] Erreur lors du scan du réseau spécifié: {e}")
+                    self.network_scan_results = []
+            else:
+                # Détecter tous les réseaux locaux et scanner chacun
+                interfaces = get_all_network_interfaces()
+                
+                if interfaces:
+                    print(f"[INFO] Scan de {len(interfaces)} sous-réseau(x)")
+                    results_all = []
+                    for iface in interfaces:
+                        if iface.get('subnet'):
+                            print(f"[INFO] Scan du sous-réseau {iface['subnet']} (via {iface['name']})")
+                            try:
+                                import ipaddress
+                                net = ipaddress.ip_network(iface['subnet'], strict=False)
+                                for host in net.hosts():
+                                    host_str = str(host)
+                                    for port in scanner.critical_ports.keys():
+                                        result = scanner.scan_host(host_str, port)
+                                        results_all.append(result)
+                                        if result['is_open']:
+                                            print(f"[INFO] Port {port}/{result['service_name']} ouvert sur {host_str}")
+                            except Exception as e:
+                                print(f"[ERROR] Erreur lors du scan de {iface['subnet']}: {e}")
+                    self.network_scan_results = results_all
+                else:
+                    # Fallback: scanner le /24 de l'IP locale
+                    local_ip = self.local_info.get('ip_address', '127.0.0.1')
+                    print(f"[INFO] Aucune interface détectée, fallback sur le sous-réseau /24 de {local_ip}")
+                    self.network_scan_results = scanner.scan_subnet(local_ip, subnet_mask=24)
     
     def collect_ad_info(self):
         """
