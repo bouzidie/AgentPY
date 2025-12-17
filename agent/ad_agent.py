@@ -155,12 +155,18 @@ class ADAgent:
                     self.network_scan_results = []
             else:
                 # Détecter tous les réseaux locaux et scanner chacun
+                # PRIORITAIRE: scanner le réseau domaine 70.70.70.0/24 d'abord
                 interfaces = get_all_network_interfaces()
                 
                 if interfaces:
-                    print(f"[INFO] Scan de {len(interfaces)} sous-réseau(x)")
+                    # Trier les interfaces pour mettre 70.70.70.x en premier
+                    domain_interfaces = [i for i in interfaces if i.get('ip', '').startswith('70.70.70.')]
+                    other_interfaces = [i for i in interfaces if not i.get('ip', '').startswith('70.70.70.')]
+                    sorted_interfaces = domain_interfaces + other_interfaces
+                    
+                    print(f"[INFO] Scan de {len(sorted_interfaces)} sous-réseau(x) (domaine d'abord)")
                     results_all = []
-                    for iface in interfaces:
+                    for iface in sorted_interfaces:
                         if iface.get('subnet'):
                             print(f"[INFO] Scan du sous-réseau {iface['subnet']} (via {iface['name']})")
                             try:
@@ -177,23 +183,28 @@ class ADAgent:
                                 print(f"[ERROR] Erreur lors du scan de {iface['subnet']}: {e}")
                     self.network_scan_results = results_all
                 else:
-                    # Fallback: scanner le /24 de l'IP locale
+                    # Fallback: scanner le /24 de l'IP locale - mais d'abord essayer 70.70.70.0/24
                     local_ip = self.local_info.get('ip_address', '127.0.0.1')
-                    print(f"[INFO] Aucune interface détectée, fallback sur le sous-réseau /24 de {local_ip}")
-                    try:
-                        net = ipaddress.ip_network(f"{local_ip}/24", strict=False)
-                        results_all = []
-                        for host in net.hosts():
-                            host_str = str(host)
-                            for port in scanner.critical_ports.keys():
-                                result = scanner.scan_host(host_str, port)
-                                results_all.append(result)
-                                if result['is_open']:
-                                    print(f"[INFO] Port {port}/{result['service_name']} ouvert sur {host_str}")
-                        self.network_scan_results = results_all
-                    except Exception as e:
-                        print(f"[ERROR] Erreur lors du fallback: {e}")
-                        self.network_scan_results = []
+                    print(f"[INFO] Aucune interface détectée - tentatives de fallback")
+                    
+                    # Essayer d'abord le réseau domaine par défaut
+                    networks_to_try = ['70.70.70.0/24', f"{local_ip}/24"]
+                    results_all = []
+                    
+                    for target_net in networks_to_try:
+                        print(f"[INFO] Tentative de scan sur {target_net}")
+                        try:
+                            net = ipaddress.ip_network(target_net, strict=False)
+                            for host in net.hosts():
+                                host_str = str(host)
+                                for port in scanner.critical_ports.keys():
+                                    result = scanner.scan_host(host_str, port)
+                                    results_all.append(result)
+                                    if result['is_open']:
+                                        print(f"[INFO] Port {port}/{result['service_name']} ouvert sur {host_str}")
+                        except Exception as e:
+                            print(f"[ERROR] Erreur lors du scan de {target_net}: {e}")
+                    self.network_scan_results = results_all
     
     def collect_ad_info(self):
         """
@@ -206,30 +217,46 @@ class ADAgent:
         ldap_pass = os.getenv('AD_LDAP_PASS')
         
         # Tenter en priorité les IPs où le port 389 a été trouvé ouvert
+        # IMPORTANT: Trier pour mettre 70.70.70.4 (DC domaine) en premier
         ldap_ips = []
         if self.network_scan_results:
             ldap_ips = [r['host'] for r in self.network_scan_results if r.get('port') == 389 and r.get('is_open')]
+            # Trier pour mettre les IPs du réseau domaine en premier
+            ldap_ips = sorted(ldap_ips, key=lambda ip: (not ip.startswith('70.70.70.'), ip))
+            print(f"[INFO] IPs avec LDAP détectées: {ldap_ips}")
         
         connected = False
         for ip in ldap_ips:
-            ldap_collector = LDAPCollector(domain_controller=ip, user=ldap_user, password=ldap_pass)
-            if ldap_collector.connect():
-                self.users = ldap_collector.get_users()
-                self.machines = ldap_collector.get_machines()
-                self.spn_accounts = ldap_collector.get_spn_accounts()
-                ldap_collector.close()
-                connected = True
-                break
+            try:
+                print(f"[INFO] Tentative de connexion LDAP vers {ip}")
+                ldap_collector = LDAPCollector(domain_controller=ip, user=ldap_user, password=ldap_pass)
+                if ldap_collector.connect():
+                    self.users = ldap_collector.get_users()
+                    self.machines = ldap_collector.get_machines()
+                    self.spn_accounts = ldap_collector.get_spn_accounts()
+                    ldap_collector.close()
+                    connected = True
+                    print(f"[SUCCESS] Connexion LDAP établie vers {ip}")
+                    break
+            except Exception as e:
+                print(f"[ERROR] Connexion LDAP vers {ip} échouée: {e}")
         
         # Si aucune IP n'a fonctionné, essayer la découverte automatique (fallback)
         if not connected:
-            ldap_collector = LDAPCollector(user=ldap_user, password=ldap_pass)
-            if ldap_collector.connect():
-                self.users = ldap_collector.get_users()
-                self.machines = ldap_collector.get_machines()
-                self.spn_accounts = ldap_collector.get_spn_accounts()
-                ldap_collector.close()
-            else:
+            try:
+                print("[INFO] Tentative de connexion LDAP avec autodétection du DC")
+                ldap_collector = LDAPCollector(user=ldap_user, password=ldap_pass)
+                if ldap_collector.connect():
+                    self.users = ldap_collector.get_users()
+                    self.machines = ldap_collector.get_machines()
+                    self.spn_accounts = ldap_collector.get_spn_accounts()
+                    ldap_collector.close()
+                    connected = True
+                    print("[SUCCESS] Connexion LDAP établie via autodétection")
+            except Exception as e:
+                print(f"[ERROR] Connexion LDAP autodétection échouée: {e}")
+            
+            if not connected:
                 print("[WARNING] Impossible de se connecter au contrôleur de domaine. Les informations AD ne seront pas collectées.")
     
     def prepare_report(self) -> Dict:

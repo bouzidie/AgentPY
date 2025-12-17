@@ -153,11 +153,17 @@ class ADAgentMultithreaded:
                     hosts = [self.local_info.get('ip_address', '127.0.0.1')]
             else:
                 # Détecter tous les réseaux locaux
+                # PRIORITAIRE: scanner le réseau domaine 70.70.70.0/24 d'abord
                 try:
                     interfaces = get_all_network_interfaces()
                     if interfaces:
-                        print(f"[INFO] Collecte des hôtes à scanner depuis {len(interfaces)} interface(s)")
-                        for iface in interfaces:
+                        # Trier les interfaces pour mettre 70.70.70.x en premier
+                        domain_interfaces = [i for i in interfaces if i.get('ip', '').startswith('70.70.70.')]
+                        other_interfaces = [i for i in interfaces if not i.get('ip', '').startswith('70.70.70.')]
+                        sorted_interfaces = domain_interfaces + other_interfaces
+                        
+                        print(f"[INFO] Collecte des hôtes à scanner depuis {len(sorted_interfaces)} interface(s)")
+                        for iface in sorted_interfaces:
                             if iface.get('subnet'):
                                 print(f"[INFO] Interface {iface['name']}: {iface['subnet']}")
                                 try:
@@ -171,10 +177,16 @@ class ADAgentMultithreaded:
                 # Fallback
                 if not hosts:
                     local_ip = self.local_info.get('ip_address', '127.0.0.1')
-                    print(f"[INFO] Fallback sur le /24 de {local_ip}")
+                    print(f"[INFO] Fallback: tentative sur réseau domaine 70.70.70.0/24")
                     try:
-                        network = ipaddress.ip_network(f"{local_ip}/24", strict=False)
+                        # Essayer d'abord le réseau domaine
+                        network = ipaddress.ip_network('70.70.70.0/24', strict=False)
                         hosts = [str(h) for h in network.hosts()]
+                        if not hosts:
+                            # Si échec, essayer le /24 de l'IP locale
+                            print(f"[INFO] Fallback sur le /24 de {local_ip}")
+                            network = ipaddress.ip_network(f"{local_ip}/24", strict=False)
+                            hosts = [str(h) for h in network.hosts()]
                     except Exception as e:
                         print(f"[ERROR] Erreur lors du fallback: {e}")
                         hosts = [local_ip]
@@ -229,22 +241,36 @@ class ADAgentMultithreaded:
         ldap_pass = os.getenv('AD_LDAP_PASS')
 
         # Prioriser les IPs avec 389 ouvert
+        # IMPORTANT: Trier pour mettre 70.70.70.4 (DC domaine) en premier
         ldap_ips = [r['host'] for r in self.network_scan_results if r.get('port') == 389 and r.get('is_open')]
+        ldap_ips = sorted(ldap_ips, key=lambda ip: (not ip.startswith('70.70.70.'), ip))
+        print(f"[INFO] IPs avec LDAP détectées: {ldap_ips}")
 
         ldap_collector = None
         for ip in ldap_ips:
             try:
+                print(f"[INFO] Tentative de connexion LDAP vers {ip}")
                 tmp = LDAPCollector(domain_controller=ip, user=ldap_user, password=ldap_pass)
                 if tmp.connect():
                     ldap_collector = tmp
+                    print(f"[SUCCESS] Connexion LDAP établie vers {ip}")
                     break
-            except Exception:
+            except Exception as e:
+                print(f"[ERROR] Connexion LDAP vers {ip} échouée: {e}")
                 continue
 
         # Fallback à l'autodétection si nécessaire
         if ldap_collector is None:
-            ldap_collector = LDAPCollector(user=ldap_user, password=ldap_pass)
-            if not ldap_collector.connect():
+            try:
+                print("[INFO] Tentative de connexion LDAP avec autodétection du DC")
+                ldap_collector = LDAPCollector(user=ldap_user, password=ldap_pass)
+                if ldap_collector.connect():
+                    print("[SUCCESS] Connexion LDAP établie via autodétection")
+                else:
+                    print("[WARNING] Impossible de se connecter au contrôleur de domaine. Les informations AD ne seront pas collectées.")
+                    return
+            except Exception as e:
+                print(f"[ERROR] Connexion LDAP autodétection échouée: {e}")
                 print("[WARNING] Impossible de se connecter au contrôleur de domaine. Les informations AD ne seront pas collectées.")
                 return
 
