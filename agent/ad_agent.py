@@ -217,15 +217,18 @@ class ADAgent:
         ldap_pass = os.getenv('AD_LDAP_PASS')
         
         # Tenter en priorité les IPs où le port 389 a été trouvé ouvert
-        # IMPORTANT: Trier pour mettre 70.70.70.4 (DC domaine) en premier
+        # IMPORTANT: Trier pour mettre 70.70.70.x (DC domaine) en premier
         ldap_ips = []
         if self.network_scan_results:
             ldap_ips = [r['host'] for r in self.network_scan_results if r.get('port') == 389 and r.get('is_open')]
             # Trier pour mettre les IPs du réseau domaine en premier
             ldap_ips = sorted(ldap_ips, key=lambda ip: (not ip.startswith('70.70.70.'), ip))
-            print(f"[INFO] IPs avec LDAP détectées: {ldap_ips}")
+            if ldap_ips:
+                print(f"[INFO] IPs avec LDAP détectées: {ldap_ips}")
         
         connected = False
+        
+        # Essayer chaque IP détectée avec le port 389 ouvert
         for ip in ldap_ips:
             try:
                 print(f"[INFO] Tentative de connexion LDAP vers {ip}")
@@ -241,10 +244,10 @@ class ADAgent:
             except Exception as e:
                 print(f"[ERROR] Connexion LDAP vers {ip} échouée: {e}")
         
-        # Si aucune IP n'a fonctionné, essayer la découverte automatique (fallback)
-        if not connected:
+        # Si aucune IP n'a fonctionné, essayer la découverte automatique SEULEMENT si pas d'IPs trouvées
+        if not connected and not ldap_ips:
             try:
-                print("[INFO] Tentative de connexion LDAP avec autodétection du DC")
+                print("[INFO] Aucune IP LDAP trouvée par scan - tentative avec autodétection du DC")
                 ldap_collector = LDAPCollector(user=ldap_user, password=ldap_pass)
                 if ldap_collector.connect():
                     self.users = ldap_collector.get_users()
@@ -255,9 +258,9 @@ class ADAgent:
                     print("[SUCCESS] Connexion LDAP établie via autodétection")
             except Exception as e:
                 print(f"[ERROR] Connexion LDAP autodétection échouée: {e}")
-            
-            if not connected:
-                print("[WARNING] Impossible de se connecter au contrôleur de domaine. Les informations AD ne seront pas collectées.")
+        
+        if not connected:
+            print("[WARNING] Impossible de se connecter au contrôleur de domaine. Les informations AD ne seront pas collectées.")
     
     def prepare_report(self) -> Dict:
         """

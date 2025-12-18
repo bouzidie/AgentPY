@@ -143,19 +143,30 @@ class LDAPCollector:
         users = []
         
         try:
-            # Rechercher tous les utilisateurs
+            # Rechercher les VRAIS utilisateurs (pas les ordinateurs)
+            # Filtre: objectClass=user ET NOT computer
+            search_filter = '(&(objectClass=user)(!(objectClass=computer)))'
+            print(f"[DEBUG] Recherche d'utilisateurs avec filtre: {search_filter}")
+            
             self.connection.search(
                 search_base=self.base_dn,
-                search_filter='(objectClass=user)',
+                search_filter=search_filter,
                 search_scope=ldap3.SUBTREE,
                 attributes=['sAMAccountName', 'displayName', 'mail', 'userAccountControl', 
                            'lastLogon', 'whenCreated', 'pwdLastSet']
             )
             
+            print(f"[DEBUG] {len(self.connection.entries)} entrées trouvées")
+            
             for entry in self.connection.entries:
                 try:
+                    username = str(entry.sAMAccountName) if entry.sAMAccountName else ''
+                    # Filtrer les comptes système
+                    if username.lower() in ['krbtgt', 'guest', 'administrator']:
+                        continue
+                    
                     user = {
-                        'username': str(entry.sAMAccountName) if entry.sAMAccountName else '',
+                        'username': username,
                         'full_name': str(entry.displayName) if entry.displayName else '',
                         'email': str(entry.mail) if entry.mail else '',
                         'is_disabled': self._is_account_disabled(entry.userAccountControl),
@@ -165,6 +176,7 @@ class LDAPCollector:
                         'password_last_set': self._convert_ad_timestamp(entry.pwdLastSet) if entry.pwdLastSet else None
                     }
                     users.append(user)
+                    print(f"[DEBUG] Utilisateur trouvé: {username}")
                 except Exception as e:
                     print(f"[ERROR] Erreur lors de la récupération d'un utilisateur: {e}")
             
@@ -185,19 +197,25 @@ class LDAPCollector:
         machines = []
         
         try:
-            # Rechercher toutes les machines
+            # Rechercher toutes les machines (ordinateurs)
+            search_filter = '(objectClass=computer)'
+            print(f"[DEBUG] Recherche de machines avec filtre: {search_filter}")
+            
             self.connection.search(
                 search_base=self.base_dn,
-                search_filter='(objectClass=computer)',
+                search_filter=search_filter,
                 search_scope=ldap3.SUBTREE,
                 attributes=['cn', 'dNSHostName', 'operatingSystem', 'operatingSystemVersion',
                            'userAccountControl', 'lastLogon', 'whenCreated']
             )
             
+            print(f"[DEBUG] {len(self.connection.entries)} machines trouvées")
+            
             for entry in self.connection.entries:
                 try:
+                    hostname = str(entry.cn) if entry.cn else ''
                     machine = {
-                        'hostname': str(entry.cn) if entry.cn else '',
+                        'hostname': hostname,
                         'dns_hostname': str(entry.dNSHostName) if entry.dNSHostName else '',
                         'os_version': str(entry.operatingSystem) if entry.operatingSystem else '',
                         'os_version_detail': str(entry.operatingSystemVersion) if entry.operatingSystemVersion else '',
@@ -206,6 +224,7 @@ class LDAPCollector:
                         'created': self._convert_ad_timestamp(entry.whenCreated) if entry.whenCreated else None
                     }
                     machines.append(machine)
+                    print(f"[DEBUG] Machine trouvée: {hostname}")
                 except Exception as e:
                     print(f"[ERROR] Erreur lors de la récupération d'une machine: {e}")
             
@@ -226,13 +245,18 @@ class LDAPCollector:
         spn_accounts = []
         
         try:
-            # Rechercher les comptes avec SPN
+            # Rechercher les comptes avec SPN (machines et utilisateurs avec SPN)
+            search_filter = '(servicePrincipalName=*)'
+            print(f"[DEBUG] Recherche de comptes SPN avec filtre: {search_filter}")
+            
             self.connection.search(
                 search_base=self.base_dn,
-                search_filter='(&(objectClass=user)(servicePrincipalName=*))',
+                search_filter=search_filter,
                 search_scope=ldap3.SUBTREE,
-                attributes=['sAMAccountName', 'servicePrincipalName', 'displayName']
+                attributes=['sAMAccountName', 'servicePrincipalName', 'displayName', 'objectClass']
             )
+            
+            print(f"[DEBUG] {len(self.connection.entries)} comptes SPN trouvés")
             
             for entry in self.connection.entries:
                 try:
@@ -259,6 +283,7 @@ class LDAPCollector:
                             'port': spn_info['port']
                         }
                         spn_accounts.append(spn_account)
+                        print(f"[DEBUG] SPN trouvé: {spn} -> {username}")
                 except Exception as e:
                     print(f"[ERROR] Erreur lors de la récupération d'un compte SPN: {e}")
             
