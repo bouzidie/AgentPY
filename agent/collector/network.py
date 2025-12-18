@@ -274,6 +274,9 @@ def get_all_network_interfaces() -> List[Dict]:
             if current_interface and line.startswith(' '):
                 if 'Adresse IPv4' in line or 'IPv4 Address' in line:
                     ip_str = line.split(':')[1].strip() if ':' in line else ''
+                    # Nettoyer les suffixes comme (prfr), (Preferred), etc.
+                    if '(' in ip_str:
+                        ip_str = ip_str.split('(')[0].strip()
                     if ip_str and ip_str != '' and ip_str != '127.0.0.1':
                         current_interface['ip'] = ip_str
                 

@@ -133,7 +133,7 @@ class ADAgent:
         import ipaddress
         
         # Timeout configurable via env var AGENT_ACTIVE_PORT_TIMEOUT (seconds)
-        active_timeout = float(os.getenv('AGENT_ACTIVE_PORT_TIMEOUT', '1.0'))
+        active_timeout = float(os.getenv('AGENT_ACTIVE_PORT_TIMEOUT', '2.0'))
         
         scanner = ActivePortScanner(timeout=active_timeout)
         

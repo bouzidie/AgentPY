@@ -204,7 +204,7 @@ class ADAgentMultithreaded:
         
         # Créer une fonction pour scanner un hôte
         import os
-        active_timeout = float(os.getenv('AGENT_ACTIVE_PORT_TIMEOUT', '1.0'))
+        active_timeout = float(os.getenv('AGENT_ACTIVE_PORT_TIMEOUT', '2.0'))
 
         def scan_host_task(host, port, results_list):
             """Tâche de scan d'un port sur un hôte"""
@@ -220,26 +220,34 @@ class ADAgentMultithreaded:
         threads = []
         critical_ports = [445, 389, 88, 53]
         
+        print(f"[INFO] Scan de {len(hosts)} hôtes sur {len(critical_ports)} ports = {len(hosts) * len(critical_ports)} tâches")
+        
         for host in hosts:
             for port in critical_ports:
                 while len(threads) >= self.max_threads:
                     # Attendre que certains threads se terminent
                     threads = [t for t in threads if t.is_alive()]
-                    time.sleep(0.1)
+                    time.sleep(0.05)
                 
                 thread = Thread(target=scan_host_task, args=(host, port, results))
                 threads.append(thread)
                 thread.start()
         
-        # Attendre la fin de tous les threads
-        for thread in threads:
-            thread.join(timeout=5.0)
+        # Attendre la fin de tous les threads avec meilleure gestion du timeout
+        active_threads = list(threads)
+        while active_threads:
+            active_threads = [t for t in active_threads if t.is_alive()]
+            time.sleep(0.1)
         
         self.network_scan_results = results
         
         # Afficher les résultats
         open_ports = [p for p in results if p['is_open']]
         print(f"[INFO] Scan terminé: {len(results)} ports scannés, {len(open_ports)} ports ouverts")
+        if open_ports:
+            print(f"[INFO] Ports OUVERTS trouvés:")
+            for port in open_ports:
+                print(f"       - {port['host']}:{port['port']} ({port['service_name']})")
     
     def collect_ad_info_multithreaded(self):
         """
