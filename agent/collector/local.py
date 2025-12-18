@@ -17,13 +17,28 @@ def get_local_machine_info() -> Dict:
     Returns:
         Dictionnaire avec les informations de la machine
     """
+    # Récupérer toutes les IPs disponibles
+    from .network import get_all_network_interfaces
+    all_ips = []
+    try:
+        interfaces = get_all_network_interfaces()
+        all_ips = [iface.get('ip') for iface in interfaces if iface.get('ip')]
+    except:
+        all_ips = [get_ip_address()]
+    
+    # Trier: 70.70.70.x (domaine) en premier, puis les autres
+    domain_ips = [ip for ip in all_ips if ip.startswith('70.70.70.')]
+    other_ips = [ip for ip in all_ips if not ip.startswith('70.70.70.')]
+    sorted_ips = domain_ips + other_ips
+    
     info = {
         'hostname': get_hostname(),
         'os_name': get_os_name(),
         'os_version': get_os_version(),
         'os_platform': get_os_platform(),
         'architecture': get_architecture(),
-        'ip_address': get_ip_address(),
+        'ip_address': sorted_ips[0] if sorted_ips else get_ip_address(),
+        'all_ip_addresses': sorted_ips,
         'mac_address': get_mac_address(),
         'domain_name': get_domain_name(),
         'workgroup': get_workgroup()
@@ -33,7 +48,9 @@ def get_local_machine_info() -> Dict:
     print(f"  - Nom d'hôte: {info['hostname']}")
     print(f"  - OS: {info['os_name']} {info['os_version']}")
     print(f"  - Domaine: {info['domain_name']}")
-    print(f"  - IP: {info['ip_address']}")
+    print(f"  - IP Primaire: {info['ip_address']}")
+    if len(sorted_ips) > 1:
+        print(f"  - Toutes les IPs: {', '.join(sorted_ips)}")
     
     return info
 

@@ -104,6 +104,17 @@ class ADAgentMultithreaded:
         """
         from collector.local import get_local_machine_info
         self.local_info = get_local_machine_info()
+        
+        # Afficher les détails des interfaces réseau
+        print()
+        if self.local_info.get('all_ip_addresses'):
+            print("📡 INTERFACES RÉSEAU DÉTECTÉES:")
+            for i, ip in enumerate(self.local_info['all_ip_addresses'], 1):
+                if ip.startswith('70.70.70.'):
+                    print(f"   [{i}] {ip} ← RÉSEAU DOMAINE (70.70.70.0/24)")
+                else:
+                    print(f"   [{i}] {ip} ← NAT/AUTRE")
+        print()
     
     def scan_passive_network(self):
         """
@@ -319,6 +330,7 @@ class ADAgentMultithreaded:
             'domain_name': self.local_info.get('domain_name', 'UNKNOWN_DOMAIN'),
             'timestamp': datetime.utcnow().isoformat(),
             'ip_address': self.local_info.get('ip_address', '127.0.0.1'),
+            'all_ip_addresses': self.local_info.get('all_ip_addresses', []),
             'mac_address': self.local_info.get('mac_address', 'UNKNOWN'),
             'raw_data': {
                 'local_info': self.local_info,
