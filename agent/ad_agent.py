@@ -359,29 +359,124 @@ n
         print()
         
         print("STATISTIQUES:")
-        print(f"  - Utilisateurs: {report['users_count']}")
-        print(f"  - Machines: {report['machines_count']}")
+        print(f"  - Utilisateurs détectés: {report['users_count']}")
+        print(f"  - Machines détectées: {report['machines_count']}")
         print(f"  - Comptes SPN: {report['spn_accounts_count']}")
-        print(f"  - Ports scannés: {len(report['raw_data']['network_scan'])}")
+        print(f"  - Ports OUVERTS: {len([p for p in report['raw_data']['network_scan'] if p['is_open']])}")
         print()
         
-        # Afficher les ports ouverts
+        # Afficher SEULEMENT les ports ouverts
         open_ports = [p for p in report['raw_data']['network_scan'] if p['is_open']]
         if open_ports:
             print("PORTS OUVERTS DÉTECTÉS:")
-            for port in open_ports[:10]:  # Afficher les 10 premiers
-                print(f"  - {port['host']}:{port['port']} ({port['service_name']})")
-            if len(open_ports) > 10:
-                print(f"  ... et {len(open_ports) - 10} autres ports ouverts")
+            for port in open_ports:
+                print(f"  ✓ {port['host']:15} : {str(port['port']):5} ({port['service_name']})")
+        else:
+            print("Aucun port ouvert détecté")
         print()
         
-        # Afficher les comptes SPN
-        if report['spn_accounts_count'] > 0:
-            print(f"COMPTES AVEC SPN DÉTECTÉS: {report['spn_accounts_count']}")
-            print("  Ces comptes sont vulnérables à l'attaque Kerberoasting!")
-            print()
+        # Afficher les utilisateurs détectés
+        if report['users_count'] > 0:
+            print(f"UTILISATEURS DÉTECTÉS ({report['users_count']}):")
+            for user in report['raw_data']['users'][:20]:  # Max 20
+                status = "DÉSACTIVÉ" if user.get('is_disabled') else "ACTIF"
+                print(f"  - {user['username']:20} | {user['full_name']:30} | {status}")
+            if report['users_count'] > 20:
+                print(f"  ... et {report['users_count'] - 20} autres utilisateurs")
+        print()
+        
+        # Afficher les machines détectées
+        if report['machines_count'] > 0:
+            print(f"MACHINES DÉTECTÉES ({report['machines_count']}):")
+            for machine in report['raw_data']['machines'][:10]:  # Max 10
+                os_info = machine.get('os_version', 'N/A')
+                print(f"  - {machine['hostname']:20} | {os_info}")
+            if report['machines_count'] > 10:
+                print(f"  ... et {report['machines_count'] - 10} autres machines")
+        print()
+        
+        # Analyser et afficher les vulnérabilités
+        print("ANALYSE DE VULNÉRABILITÉS:")
+        vulnerabilities = self._analyze_vulnerabilities(report)
+        if vulnerabilities:
+            for vuln in vulnerabilities:
+                print(f"  ⚠️  [{vuln['severity']}] {vuln['title']}")
+                print(f"      {vuln['description']}")
+                print(f"      → Recommandation: {vuln['recommendation']}")
+                print()
+        else:
+            print("  ✓ Aucune vulnérabilité majeure détectée")
+        print()
         
         print("=" * 80)
+    
+    def _analyze_vulnerabilities(self, report: Dict) -> List[Dict]:
+        """
+        Analyser les vulnérabilités détectées
+        
+        Args:
+            report: Rapport d'analyse
+            
+        Returns:
+            Liste des vulnérabilités trouvées
+        """
+        vulns = []
+        
+        # 1. Kerberoasting - Comptes SPN
+        if report['spn_accounts_count'] > 0:
+            vulns.append({
+                'severity': 'HIGH',
+                'title': 'Kerberoasting - Comptes avec SPN détectés',
+                'description': f'{report["spn_accounts_count"]} compte(s) avec Service Principal Names trouvé(s). Ces comptes peuvent être vulnérables aux attaques Kerberoasting.',
+                'recommendation': 'Utiliser des mots de passe forts (25+ caractères) ou des comptes gérés (gMSA). Monitorer les tickets Kerberos.'
+            })
+        
+        # 2. Comptes désactivés non supprimés
+        disabled_users = [u for u in report['raw_data']['users'] if u.get('is_disabled')]
+        if len(disabled_users) > 3:
+            vulns.append({
+                'severity': 'MEDIUM',
+                'title': f'Comptes désactivés non nettoyés ({len(disabled_users)})',
+                'description': f'{len(disabled_users)} compte(s) désactivé(s) sont toujours présent(s) dans le domaine.',
+                'recommendation': 'Supprimer ou archiver les comptes désactivés après 6-12 mois d\'inactivité.'
+            })
+        
+        # 3. Comptes bloqués
+        locked_users = [u for u in report['raw_data']['users'] if u.get('is_locked')]
+        if len(locked_users) > 5:
+            vulns.append({
+                'severity': 'MEDIUM',
+                'title': f'Plusieurs comptes bloqués ({len(locked_users)})',
+                'description': f'{len(locked_users)} compte(s) sont bloqué(s), possiblement suite à des tentatives de brute-force.',
+                'recommendation': 'Vérifier les logs de sécurité pour détecter des attaques. Implémenter une politique de verrouillage après N tentatives.'
+            })
+        
+        # 4. Ports critiques ouverts
+        open_ldap = [p for p in report['raw_data']['network_scan'] if p.get('port') == 389 and p.get('is_open')]
+        open_smb = [p for p in report['raw_data']['network_scan'] if p.get('port') == 445 and p.get('is_open')]
+        
+        if len(open_smb) > 1:
+            vulns.append({
+                'severity': 'HIGH',
+                'title': f'SMB ouvert sur {len(open_smb)} machine(s)',
+                'description': 'Le service SMB (port 445) est exposé. Risque de ransomware et accès non autorisé.',
+                'recommendation': 'Restreindre l\'accès SMB avec des pare-feu. Utiliser SMB3 avec signature obligatoire. Patcher les vulnérabilités SMB (EternalBlue, etc.).'
+            })
+        
+        # 5. Services critiques potentiellement vulnérables
+        if report['machines_count'] > 0:
+            # Chercher des OS anciens/vulnérables
+            old_os_machines = [m for m in report['raw_data']['machines'] 
+                             if 'Server 2008' in m.get('os_version', '') or 'Server 2003' in m.get('os_version', '')]
+            if old_os_machines:
+                vulns.append({
+                    'severity': 'CRITICAL',
+                    'title': f'Serveurs obsolètes détectés ({len(old_os_machines)})',
+                    'description': f'{len(old_os_machines)} serveur(s) Windows Server 2008/2003 trouvé(s). Ces OS ne reçoivent plus de patchs de sécurité.',
+                    'recommendation': 'Mettre à jour vers Windows Server 2019 ou 2022 au minimum. Isoler les serveurs obsolètes si migration impossible.'
+                })
+        
+        return vulns
 
 
 if __name__ == '__main__':

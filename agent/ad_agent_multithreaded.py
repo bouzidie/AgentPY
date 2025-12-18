@@ -404,27 +404,41 @@ class ADAgentMultithreaded:
         print()
         
         print("STATISTIQUES:")
-        print(f"  - Utilisateurs: {report['users_count']}")
-        print(f"  - Machines: {report['machines_count']}")
+        print(f"  - Utilisateurs détectés: {report['users_count']}")
+        print(f"  - Machines détectées: {report['machines_count']}")
         print(f"  - Comptes SPN: {report['spn_accounts_count']}")
-        print(f"  - Ports scannés: {len(report['raw_data']['network_scan'])}")
+        print(f"  - Ports OUVERTS: {len([p for p in report['raw_data']['network_scan'] if p['is_open']])}")
         print()
         
-        # Afficher les ports ouverts
+        # Afficher SEULEMENT les ports ouverts
         open_ports = [p for p in report['raw_data']['network_scan'] if p['is_open']]
         if open_ports:
             print("PORTS OUVERTS DÉTECTÉS:")
-            for port in open_ports[:10]:  # Afficher les 10 premiers
-                print(f"  - {port['host']}:{port['port']} ({port['service_name']})")
-            if len(open_ports) > 10:
-                print(f"  ... et {len(open_ports) - 10} autres ports ouverts")
+            for port in open_ports:
+                print(f"  ✓ {port['host']:15} : {str(port['port']):5} ({port['service_name']})")
+        else:
+            print("Aucun port ouvert détecté")
+        print()
+        
+        # Afficher les utilisateurs détectés
+        if report['users_count'] > 0:
+            print(f"UTILISATEURS DÉTECTÉS ({report['users_count']}):")
+            for user in report['raw_data']['users'][:20]:  # Max 20
+                status = "DÉSACTIVÉ" if user.get('is_disabled') else "ACTIF"
+                print(f"  - {user['username']:20} | {user['full_name']:30} | {status}")
+            if report['users_count'] > 20:
+                print(f"  ... et {report['users_count'] - 20} autres utilisateurs")
         print()
         
         # Afficher les comptes SPN
         if report['spn_accounts_count'] > 0:
-            print(f"COMPTES AVEC SPN DÉTECTÉS: {report['spn_accounts_count']}")
-            print("  Ces comptes sont vulnérables à l'attaque Kerberoasting!")
-            print()
+            print(f"COMPTES AVEC SPN DÉTECTÉS ({report['spn_accounts_count']}):")
+            print("  ⚠️  Ces comptes sont vulnérables à l'attaque Kerberoasting!")
+            for spn in report['raw_data']['spn_accounts'][:10]:  # Max 10
+                print(f"  - {spn.get('username', 'UNKNOWN'):20} | SPN: {spn.get('service_principal_name', 'N/A')}")
+            if report['spn_accounts_count'] > 10:
+                print(f"  ... et {report['spn_accounts_count'] - 10} autres comptes SPN")
+        print()
         
         print("=" * 80)
 
